@@ -1,0 +1,32 @@
+{
+  "navigation": [
+		{
+			"title": "About",
+			"url": "http://www.example.com/about"
+		},
+		{
+			"title": "Sign In",
+			"url": "/signin"
+		},
+		{
+			"title": "Register",
+			"url": "/register"
+		}
+	],
+  "hero": {
+    "name": "Receiptify",
+    "subtitle": "Automate your email receipts"
+  },
+  "about": {
+    "title": "About me",
+    "image": "/placeholder.png",
+    "primary": "This is where you can describe about yourself. The more you describe about yourself, the more chances you have!",
+    "secondary": "Extra Information about you! like hobbies and your goals."
+  },
+  
+  "footer": {
+		"linkedin": "",
+		"twitter": "",
+		"github": ""
+	}
+}
