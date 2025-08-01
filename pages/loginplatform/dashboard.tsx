@@ -1,6 +1,7 @@
 import { useSession, signOut } from 'next-auth/react'
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/router'
+import SetupGmailWatch from '../../components/SetupGmailWatch'
 
 interface Email {
   id: string
@@ -8,6 +9,7 @@ interface Email {
   subject: string
   date: string
   snippet: string
+  source?: string
 }
 
 export default function Dashboard() {
@@ -111,6 +113,11 @@ export default function Dashboard() {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Gmail Push Notifications Setup */}
+        <div className="mb-8">
+          <SetupGmailWatch />
+        </div>
+        
         <div className="bg-white rounded-lg shadow">
           <div className="px-6 py-4 border-b border-gray-200">
             <div className="flex items-center justify-between">
