@@ -108,6 +108,98 @@ export class GmailService {
   }
   
   /**
+   * Get an attachment from a message
+   */
+  async getAttachment(messageId: string, attachmentId: string, userId = 'me') {
+    try {
+      const response = await this.gmail.users.messages.attachments.get({
+        userId,
+        messageId,
+        id: attachmentId
+      });
+      
+      return response.data;
+    } catch (error) {
+      console.error('Error fetching attachment:', error);
+      return null;
+    }
+  }
+  
+  /**
+   * Check if an email has PDF attachments
+   */
+  static hasPdfAttachment(message: any): boolean {
+    try {
+      // Check if the message has a payload
+      if (!message || !message.payload) {
+        return false;
+      }
+      
+      // Function to recursively check parts for PDF attachments
+      const checkPartsForPdf = (part: any): boolean => {
+        // Check current part
+        if (part.mimeType === 'application/pdf') {
+          return true;
+        }
+        
+        // Check filename for .pdf extension
+        if (part.filename && part.filename.toLowerCase().endsWith('.pdf')) {
+          return true;
+        }
+        
+        // Check if this part has nested parts
+        if (part.parts && part.parts.length > 0) {
+          return part.parts.some((subPart: any) => checkPartsForPdf(subPart));
+        }
+        
+        return false;
+      };
+      
+      // Start checking from the message payload
+      if (checkPartsForPdf(message.payload)) {
+        return true;
+      }
+      
+      return false;
+    } catch (error) {
+      console.error('Error checking for PDF attachments:', error);
+      return false;
+    }
+  }
+  
+  /**
+   * Get attachment details from a message
+   */
+  static getAttachments(message: any): Array<{filename: string, mimeType: string, attachmentId: string, size: number}> {
+    const attachments: Array<{filename: string, mimeType: string, attachmentId: string, size: number}> = [];
+    
+    // Function to recursively find attachments
+    const findAttachments = (part: any) => {
+      // Check if this part is an attachment
+      if (part.filename && part.filename.length > 0 && part.body && part.body.attachmentId) {
+        attachments.push({
+          filename: part.filename,
+          mimeType: part.mimeType,
+          attachmentId: part.body.attachmentId,
+          size: part.body.size || 0
+        });
+      }
+      
+      // Recursively check nested parts
+      if (part.parts && part.parts.length > 0) {
+        part.parts.forEach((subPart: any) => findAttachments(subPart));
+      }
+    };
+    
+    // Start checking from the message payload
+    if (message && message.payload) {
+      findAttachments(message.payload);
+    }
+    
+    return attachments;
+  }
+  
+  /**
    * Extract the body content from an email message
    */
   static extractEmailBody(payload: any): string | null {
