@@ -1,77 +1,77 @@
-import type { NextApiRequest, NextApiResponse } from 'next';
-import { getServerSession } from 'next-auth/next';
-import { authOptions } from './auth/[...nextauth]';
-import { ReceiptProcessor } from '../../lib/receipt-processor';
-import { LedgerEntry, PaginatedResult } from '../../types/receipt-types';
+import { NextApiRequest, NextApiResponse } from 'next';
+import { ReceiptProcessorWithDB } from '../../lib/receipt-processor-db';
+import { LedgerFilters, PaginationParams } from '../../types/receipt-processing';
 
-type ResponseData = {
-  success: boolean;
-  message?: string;
-  data?: PaginatedResult<LedgerEntry>;
-  error?: string;
-};
-
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse<ResponseData>
-) {
-  // Check if user is authenticated
-  const session = await getServerSession(req, res, authOptions);
-  if (!session) {
-    return res.status(401).json({ 
-      success: false, 
-      message: 'Authentication required' 
-    });
-  }
-
-  // Only allow GET requests
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
-    return res.status(405).json({ 
-      success: false, 
-      message: 'Method not allowed' 
-    });
+    return res.status(405).json({ message: 'Method not allowed' });
   }
 
   try {
-    // Extract query parameters
-    const { 
-      search, 
-      startDate, 
-      endDate, 
-      minAmount,
-      maxAmount, 
-      minConfidence, 
-      sortField, 
-      sortDirection,
-      page,
-      pageSize
-    } = req.query;
-    
-    // Parse query parameters
-    const filters = {
-      searchTerm: search as string,
-      startDate: startDate ? new Date(startDate as string) : undefined,
-      endDate: endDate ? new Date(endDate as string) : undefined,
-      minAmount: minAmount ? parseFloat(minAmount as string) : undefined,
-      maxAmount: maxAmount ? parseFloat(maxAmount as string) : undefined,
-      minConfidence: minConfidence ? parseInt(minConfidence as string, 10) : undefined,
-      sortField: sortField as string,
-      sortDirection: (sortDirection as 'asc' | 'desc') || 'desc',
-      page: page ? parseInt(page as string, 10) : 1,
-      pageSize: pageSize ? parseInt(pageSize as string, 10) : 10
-    };
-    
-    // Get ledger entries
-    const receiptProcessor = new ReceiptProcessor();
-    const data = await receiptProcessor.getLedgerEntries(filters);
+    const processor = new ReceiptProcessorWithDB();
 
-    return res.status(200).json({ success: true, data });
+    // Parse query parameters
+    const {
+      page = '1',
+      limit = '20',
+      sortBy = 'created_at',
+      sortOrder = 'desc',
+      searchTerm,
+      dateStart,
+      dateEnd,
+      minAmount,
+      maxAmount,
+      minConfidence
+    } = req.query;
+
+    // Build filters
+    const filters: LedgerFilters = {};
+    
+    if (searchTerm && typeof searchTerm === 'string') {
+      filters.searchTerm = searchTerm;
+    }
+
+    if (dateStart && dateEnd && typeof dateStart === 'string' && typeof dateEnd === 'string') {
+      filters.dateRange = { start: dateStart, end: dateEnd };
+    }
+
+    if (minAmount && typeof minAmount === 'string') {
+      filters.minAmount = parseFloat(minAmount);
+    }
+
+    if (maxAmount && typeof maxAmount === 'string') {
+      filters.maxAmount = parseFloat(maxAmount);
+    }
+
+    if (minConfidence && typeof minConfidence === 'string') {
+      filters.minConfidence = parseInt(minConfidence);
+    }
+
+    // Build pagination
+    const pagination: PaginationParams = {
+      page: parseInt(page as string),
+      limit: parseInt(limit as string),
+      sortBy: sortBy as string,
+      sortOrder: (sortOrder as string) === 'asc' ? 'asc' : 'desc'
+    };
+
+    const result = processor.getAllReceiptData(filters, pagination);
+
+    res.status(200).json({
+      success: true,
+      data: result.entries,
+      pagination: {
+        ...pagination,
+        total: result.total,
+        totalPages: Math.ceil(result.total / pagination.limit)
+      }
+    });
 
   } catch (error) {
-    console.error('Error fetching ledger entries:', error);
-    return res.status(500).json({ 
-      success: false, 
-      error: error instanceof Error ? error.message : 'Unknown error' 
+    console.error('Ledger API error:', error);
+    res.status(500).json({ 
+      message: 'Failed to fetch ledger data',
+      error: error instanceof Error ? error.message : 'Unknown error'
     });
   }
 }

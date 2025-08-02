@@ -10,6 +10,7 @@ export interface PdfAttachment {
   filename: string;
   data: Buffer;
   contentType: string;
+  attachmentId: string;
 }
 
 export interface LLMClassificationResult {
@@ -26,7 +27,7 @@ export interface LLMExtractionResult {
   totalAmount?: number;
   taxAmount?: number;
   subtotal?: number;
-  lineItems?: Array<{name: string, price: number, quantity?: number}>;
+  lineItems?: LineItem[];
   paymentMethod?: string;
   confidence: number;
   extractionIssues: string[];
@@ -52,55 +53,66 @@ export interface LedgerEntry {
   llmConfidence: number;
   createdAt: string;
   rawText: string;
-  llmExtractionIssues?: string[];
+  llmExtractionIssues: string[];
+}
+
+export interface DocumentAnalysis {
+  id: number;
+  emailId: string;
+  filename: string;
+  isReceipt: boolean;
+  confidenceScore: number;
+  documentType: string;
+  llmReasoning: string;
+  keyIndicators: string[];
+  processedAt: string;
+}
+
+export interface ProcessingLog {
+  id: number;
+  emailId: string;
+  filename: string;
+  processingStage: 'classification' | 'extraction' | 'validation';
+  success: boolean;
+  errorMessage?: string;
+  processingTimeMs: number;
+  processedAt: string;
 }
 
 export interface ProcessingResult {
   success: boolean;
-  stage: string;
-  message: string;
-  data?: any;
-  error?: any;
-  processingTime?: number;
+  emailId: string;
+  filename: string;
+  classification?: LLMClassificationResult;
+  extraction?: LLMExtractionResult;
+  error?: string;
+  processingTimeMs: number;
+  skipped?: boolean;
+  note?: string;
 }
 
-export interface LedgerSummaryData {
+export interface LedgerSummary {
   totalReceipts: number;
   totalAmount: number;
   averageAmount: number;
   topMerchant: string;
-  monthlySpending: {
-    month: string;
-    amount: number;
-  }[];
-  topMerchants: {
-    name: string;
-    amount: number;
-    count: number;
-  }[];
-  documentTypes: {
-    type: string;
-    count: number;
-  }[];
+  monthlySpending: Array<{month: string, amount: number}>;
+  merchantBreakdown: Array<{merchant: string, amount: number, count: number}>;
+  documentTypeBreakdown: Array<{type: string, count: number}>;
 }
 
-export interface LedgerFilterOptions {
+export interface LedgerFilters {
   searchTerm?: string;
-  startDate?: Date;
-  endDate?: Date;
+  dateRange?: {start: string, end: string};
   minAmount?: number;
   maxAmount?: number;
   minConfidence?: number;
-  sortField?: string;
-  sortDirection?: 'asc' | 'desc';
-  page?: number;
-  pageSize?: number;
+  merchants?: string[];
 }
 
-export interface PaginatedResult<T> {
-  items: T[];
-  total: number;
+export interface PaginationParams {
   page: number;
-  pageSize: number;
-  totalPages: number;
+  limit: number;
+  sortBy: string;
+  sortOrder: 'asc' | 'desc';
 }

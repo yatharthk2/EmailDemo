@@ -1,172 +1,205 @@
-import axios from 'axios';
-import { LLMClassificationResult, LLMExtractionResult } from '../types/receipt-types';
+import { LLMClassificationResult, LLMExtractionResult } from '../types/receipt-processing';
 
 export class GroqLLMProcessor {
   private apiKey: string;
-  private baseUrl: string = 'https://api.groq.com/openai/v1';
-  private model: string = 'meta-llama/llama-4-scout-17b-16e-instruct';
-  
+  private baseUrl = 'https://api.groq.com/openai/v1';
+  private model = 'llama-3.1-8b-instant'; // Updated model name
+
   constructor(apiKey: string) {
     this.apiKey = apiKey;
   }
-  
+
   async classifyDocument(text: string): Promise<LLMClassificationResult> {
     const startTime = Date.now();
-
+    
     try {
-      // Truncate text if it's too long to fit in context window
-      const truncatedText = text.length > 6000 ? text.substring(0, 6000) : text;
+      const truncatedText = text.substring(0, 2000); // Limit text size for API
       
       const messages = [{
         role: "user" as const,
-        content: `Analyze this document and determine if it's a retail receipt.
-        
-        Document text: "${truncatedText}"
-        
-        Respond with JSON only:
-        {
-          "isReceipt": boolean,
-          "confidence": number (0-100),
-          "documentType": "receipt" | "invoice" | "statement" | "other",
-          "reasoning": "brief explanation",
-          "keyIndicators": ["indicator1", "indicator2"]
-        }`
+        content: `Analyze this document and determine if it's a retail receipt or purchase receipt.
+
+Look for these key indicators:
+- Store/merchant name
+- Purchase date and time
+- Individual item listings with prices
+- Subtotal, tax, and total amounts
+- Payment method information
+- Receipt-specific formatting
+
+Document text: "${truncatedText}"
+
+Respond with valid JSON only (no additional text):
+{
+  "isReceipt": boolean,
+  "confidence": number (0-100),
+  "documentType": "receipt" | "invoice" | "statement" | "other",
+  "reasoning": "brief explanation of classification decision",
+  "keyIndicators": ["specific phrases or elements that indicate this is/isn't a receipt"]
+}`
       }];
-      
-      const response = await axios.post(
-        `${this.baseUrl}/chat/completions`,
-        {
-          model: this.model,
-          messages,
-          temperature: 0.1, // Low temperature for factual responses
-          max_tokens: 1000, // Limit token usage
-          response_format: { type: "json_object" }
+
+      const response = await fetch(`${this.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
         },
-        {
-          headers: {
-            'Authorization': `Bearer ${this.apiKey}`,
-            'Content-Type': 'application/json'
-          }
-        }
-      );
-      
-      // Parse the response content
-      const content = response.data.choices[0].message.content;
-      const jsonResponse = JSON.parse(content);
-      
-      // Validate the response format
-      const result: LLMClassificationResult = {
-        isReceipt: jsonResponse.isReceipt === true,
-        confidence: Math.min(100, Math.max(0, jsonResponse.confidence || 0)),
-        documentType: jsonResponse.documentType || 'other',
-        reasoning: jsonResponse.reasoning || 'No reasoning provided',
-        keyIndicators: Array.isArray(jsonResponse.keyIndicators) ? jsonResponse.keyIndicators : []
-      };
-      
-      console.log(`Document classification completed in ${Date.now() - startTime}ms`);
+        body: JSON.stringify({
+          model: this.model,
+          messages: messages,
+          temperature: 0.1,
+          max_tokens: 500,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Groq API error: ${response.status} ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      const content = data.choices[0]?.message?.content;
+
+      if (!content) {
+        throw new Error('No content received from Groq API');
+      }
+
+      // Parse JSON response
+      let result: LLMClassificationResult;
+      try {
+        // Clean the response to extract JSON
+        const jsonMatch = content.match(/\{[\s\S]*\}/);
+        const jsonStr = jsonMatch ? jsonMatch[0] : content;
+        result = JSON.parse(jsonStr);
+      } catch (parseError) {
+        throw new Error(`Failed to parse LLM response as JSON: ${parseError}`);
+      }
+
+      // Validate the result structure
+      if (typeof result.isReceipt !== 'boolean' || 
+          typeof result.confidence !== 'number' ||
+          !result.documentType ||
+          !result.reasoning) {
+        throw new Error('Invalid response structure from LLM');
+      }
+
+      console.log(`Classification completed in ${Date.now() - startTime}ms`);
       return result;
-      
+
     } catch (error) {
       console.error('Error in document classification:', error);
-      // Return default response in case of error
-      return {
-        isReceipt: false,
-        confidence: 0,
-        documentType: 'other',
-        reasoning: `Error during classification: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        keyIndicators: []
-      };
+      throw error;
     }
   }
 
   async extractReceiptData(text: string): Promise<LLMExtractionResult> {
     const startTime = Date.now();
-
+    
     try {
-      // Truncate text if it's too long to fit in context window
-      const truncatedText = text.length > 6000 ? text.substring(0, 6000) : text;
-      
       const messages = [{
         role: "user" as const,
-        content: `Extract structured data from this receipt text.
-        
-        Receipt text: "${truncatedText}"
-        
-        Return JSON only:
-        {
-          "merchantName": string,
-          "transactionDate": "YYYY-MM-DD",
-          "totalAmount": number,
-          "taxAmount": number,
-          "subtotal": number,
-          "lineItems": [{"name": string, "price": number, "quantity": number}],
-          "paymentMethod": string,
-          "confidence": number (0-100),
-          "extractionIssues": ["issue1", "issue2"]
-        }`
+        content: `Extract structured data from this receipt text. Be precise with numbers and dates.
+
+Receipt text: "${text}"
+
+Extract the following information and return as valid JSON only:
+{
+  "merchantName": "string (store/business name)",
+  "transactionDate": "YYYY-MM-DD format",
+  "totalAmount": number (final total paid),
+  "taxAmount": number (tax amount if shown),
+  "subtotal": number (pre-tax subtotal if shown),
+  "lineItems": [
+    {"name": "item name", "price": number, "quantity": number (default 1)}
+  ],
+  "paymentMethod": "string (cash, card, etc.)",
+  "confidence": number (0-100, how confident you are in the extraction),
+  "extractionIssues": ["list any problems or uncertainties in the data"]
+}
+
+Rules:
+- Extract amounts as numbers without currency symbols
+- Use YYYY-MM-DD format for dates
+- If information is unclear or missing, omit the field or note in extractionIssues
+- Be conservative with confidence scores`
       }];
-      
-      const response = await axios.post(
-        `${this.baseUrl}/chat/completions`,
-        {
-          model: this.model,
-          messages,
-          temperature: 0.1,
-          max_tokens: 2000,
-          response_format: { type: "json_object" }
+
+      const response = await fetch(`${this.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
         },
-        {
-          headers: {
-            'Authorization': `Bearer ${this.apiKey}`,
-            'Content-Type': 'application/json'
-          }
-        }
-      );
-      
-      // Parse the response content
-      const content = response.data.choices[0].message.content;
-      const jsonResponse = JSON.parse(content);
-      
-      // Validate and transform line items
-      let lineItems = [];
-      if (jsonResponse.lineItems && Array.isArray(jsonResponse.lineItems)) {
-        lineItems = jsonResponse.lineItems.map((item: any) => ({
-          name: item.name || 'Unknown Item',
-          price: parseFloat(item.price) || 0,
-          quantity: item.quantity ? parseFloat(item.quantity) : 1
-        }));
+        body: JSON.stringify({
+          model: this.model,
+          messages: messages,
+          temperature: 0.1,
+          max_tokens: 1000,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Groq API error: ${response.status} ${response.statusText}`);
       }
-      
-      // Create and validate the result
-      const result: LLMExtractionResult = {
-        merchantName: jsonResponse.merchantName || 'Unknown Merchant',
-        transactionDate: jsonResponse.transactionDate || new Date().toISOString().split('T')[0],
-        totalAmount: parseFloat(jsonResponse.totalAmount) || 0,
-        taxAmount: parseFloat(jsonResponse.taxAmount) || 0,
-        subtotal: parseFloat(jsonResponse.subtotal) || 0,
-        lineItems,
-        paymentMethod: jsonResponse.paymentMethod || 'Unknown',
-        confidence: Math.min(100, Math.max(0, jsonResponse.confidence || 0)),
-        extractionIssues: Array.isArray(jsonResponse.extractionIssues) ? jsonResponse.extractionIssues : []
-      };
-      
-      console.log(`Receipt extraction completed in ${Date.now() - startTime}ms`);
+
+      const data = await response.json();
+      const content = data.choices[0]?.message?.content;
+
+      if (!content) {
+        throw new Error('No content received from Groq API');
+      }
+
+      // Parse JSON response
+      let result: LLMExtractionResult;
+      try {
+        const jsonMatch = content.match(/\{[\s\S]*\}/);
+        const jsonStr = jsonMatch ? jsonMatch[0] : content;
+        result = JSON.parse(jsonStr);
+      } catch (parseError) {
+        throw new Error(`Failed to parse LLM response as JSON: ${parseError}`);
+      }
+
+      // Validate required fields
+      if (typeof result.confidence !== 'number') {
+        result.confidence = 50; // Default confidence
+      }
+
+      if (!Array.isArray(result.extractionIssues)) {
+        result.extractionIssues = [];
+      }
+
+      console.log(`Extraction completed in ${Date.now() - startTime}ms`);
       return result;
-      
+
     } catch (error) {
-      console.error('Error in receipt extraction:', error);
-      // Return default response in case of error
+      console.error('Error in receipt data extraction:', error);
+      // Return a minimal result with error info
       return {
-        merchantName: 'Error',
-        transactionDate: new Date().toISOString().split('T')[0],
-        totalAmount: 0,
-        taxAmount: 0,
-        subtotal: 0,
-        lineItems: [],
-        paymentMethod: 'Unknown',
         confidence: 0,
-        extractionIssues: [`Error during extraction: ${error instanceof Error ? error.message : 'Unknown error'}`]
+        extractionIssues: [`Extraction failed: ${error instanceof Error ? error.message : 'Unknown error'}`]
       };
+    }
+  }
+
+  async testConnection(): Promise<boolean> {
+    try {
+      // Test with a simple chat completion request instead of models endpoint
+      const response = await fetch(`${this.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: this.model,
+          messages: [{ role: "user", content: "Hello" }],
+          max_tokens: 5,
+          temperature: 0
+        }),
+      });
+      return response.ok;
+    } catch {
+      return false;
     }
   }
 }

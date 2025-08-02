@@ -1,5 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { ReceiptProcessorWithDB } from '../../../lib/receipt-processor-db';
+import { ReceiptProcessorWithDB } from '../../lib/receipt-processor-db';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -8,16 +8,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const processor = new ReceiptProcessorWithDB();
-    const csvData = processor.exportToCSV();
+    const summary = processor.getLedgerSummary();
 
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', 'attachment; filename="receipt-ledger.csv"');
-    res.status(200).send(csvData);
+    res.status(200).json({
+      success: true,
+      data: summary
+    });
 
   } catch (error) {
-    console.error('CSV export API error:', error);
+    console.error('Ledger summary API error:', error);
     res.status(500).json({ 
-      message: 'Failed to export CSV',
+      message: 'Failed to fetch ledger summary',
       error: error instanceof Error ? error.message : 'Unknown error'
     });
   }

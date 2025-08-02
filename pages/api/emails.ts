@@ -2,7 +2,77 @@ import { google } from 'googleapis'
 import { NextApiRequest, NextApiResponse } from 'next'
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from './auth/[...nextauth]'
-import { GmailService } from '../../lib/gmail-service'
+
+// Helper function to check for PDF attachments
+function checkForPdfAttachments(payload: any): boolean {
+  if (!payload) return false
+  
+  // Check if this part has attachments
+  if (payload.parts) {
+    for (const part of payload.parts) {
+      if (checkForPdfAttachments(part)) return true
+    }
+  }
+  
+  // Check the current part
+  if (payload.filename && payload.filename.toLowerCase().endsWith('.pdf')) {
+    return true
+  }
+  
+  // Check mimeType for PDF
+  if (payload.mimeType === 'application/pdf') {
+    return true
+  }
+  
+  return false
+}
+
+// Helper function to extract PDF attachments information
+function extractPdfAttachments(payload: any): Array<{filename: string, attachmentId: string, size?: number}> {
+  const pdfAttachments: Array<{filename: string, attachmentId: string, size?: number}> = []
+  
+  function traverse(part: any) {
+    if (part.parts) {
+      part.parts.forEach(traverse)
+    }
+    
+    if (part.filename && 
+        part.filename.toLowerCase().endsWith('.pdf') && 
+        part.body?.attachmentId) {
+      pdfAttachments.push({
+        filename: part.filename,
+        attachmentId: part.body.attachmentId,
+        size: part.body.size
+      })
+    }
+  }
+  
+  if (payload) {
+    traverse(payload)
+  }
+  
+  return pdfAttachments
+}
+
+// Helper function to count total attachments
+function countAttachments(payload: any): number {
+  if (!payload) return 0
+  
+  let count = 0
+  
+  if (payload.parts) {
+    for (const part of payload.parts) {
+      count += countAttachments(part)
+    }
+  }
+  
+  // Count if this part is an attachment
+  if (payload.filename && payload.filename.length > 0 && payload.body?.attachmentId) {
+    count++
+  }
+  
+  return count
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -16,27 +86,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(401).json({ message: 'Not authenticated' })
     }
 
-    const gmailService = new GmailService(
-      session.accessToken,
-      session.refreshToken as string
-    )
-
-    // Check for a historyId query parameter for using the push notification system
-    // This would be for manual testing or implementing continuity after webhook events
-    const historyId = req.query.historyId as string
-    
-    // If historyId is provided, fetch email changes since that ID
-    if (historyId) {
-      const history = await gmailService.getHistory(historyId)
-      if (history && history.length > 0) {
-        // Process the history changes
-        // This is similar to what would happen in the webhook
-        const emailDetails = await processHistoryChanges(gmailService, history)
-        return res.status(200).json(emailDetails)
-      }
-    }
-
-    // Default behavior - list recent messages
     const oauth2Client = new google.auth.OAuth2()
     oauth2Client.setCredentials({
       access_token: session.accessToken,
@@ -44,43 +93,45 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const gmail = google.gmail({ version: 'v1', auth: oauth2Client })
     
-    // Get list of messages without using the 'q' parameter 
-    // (since we're using the gmail.readonly scope)
+    // Calculate date 7 days ago for filtering
+    const sevenDaysAgo = new Date()
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
+    const dateFilter = sevenDaysAgo.toISOString().split('T')[0].replace(/-/g, '/')
+    
+    // Get list of messages with PDF attachments from last 7 days
     const response = await gmail.users.messages.list({
       userId: 'me',
-      maxResults: 10
+      maxResults: 50, // Increased to find more emails with PDF attachments
+      q: `is:unread has:attachment filename:pdf after:${dateFilter}`
     })
 
     if (!response.data.messages) {
       return res.status(200).json([])
     }
 
-    // Get details for each message
-    const allMessages = await Promise.all(
+    // Get details for each message and verify PDF attachments
+    const emailDetails = await Promise.all(
       response.data.messages.map(async (message) => {
-        // Get full message data to check for attachments
         const msgDetail = await gmail.users.messages.get({
           userId: 'me',
           id: message.id!,
-          format: 'full' // Using full format to get attachment info
+          format: 'full'
         })
 
         const headers = msgDetail.data.payload?.headers || []
         const from = headers.find(h => h.name === 'From')?.value || 'Unknown'
         const subject = headers.find(h => h.name === 'Subject')?.value || 'No Subject'
         const date = headers.find(h => h.name === 'Date')?.value || new Date().toISOString()
+
+        // Check for PDF attachments
+        const hasPdfAttachment = checkForPdfAttachments(msgDetail.data.payload)
         
-        // Check if this message has PDF attachments
-        const hasPdfAttachment = GmailService.hasPdfAttachment(msgDetail.data);
-        
-        // Get attachment details if there are any
-        const attachments = GmailService.getAttachments(msgDetail.data);
-        
-        // Filter to only keep PDF attachments
-        const pdfAttachments = attachments.filter(
-          attachment => attachment.mimeType === 'application/pdf' || 
-                        attachment.filename.toLowerCase().endsWith('.pdf')
-        );
+        if (!hasPdfAttachment) {
+          return null // Filter out emails without PDF attachments
+        }
+
+        const attachmentCount = countAttachments(msgDetail.data.payload)
+        const pdfAttachments = extractPdfAttachments(msgDetail.data.payload)
 
         return {
           id: message.id,
@@ -88,55 +139,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           subject,
           date: new Date(date).toISOString(),
           snippet: msgDetail.data.snippet,
-          hasPdfAttachment,
-          pdfAttachments: pdfAttachments.length > 0 ? pdfAttachments : undefined
+          attachmentCount,
+          hasPdfAttachment: true,
+          pdfAttachments
         }
       })
     )
-    
-    // Filter to only include messages with PDF attachments
-    const emailsWithPdfReceipts = allMessages.filter(email => email.hasPdfAttachment);
 
-    res.status(200).json(emailsWithPdfReceipts)
+    // Filter out null values and limit to 10 results
+    const filteredEmails = emailDetails.filter(email => email !== null).slice(0, 10)
+
+    res.status(200).json(filteredEmails)
   } catch (error) {
     console.error('Gmail API Error:', error)
     res.status(500).json({ message: 'Failed to fetch emails' })
   }
-}
-
-/**
- * Process history changes from Gmail API
- * This is used both in the webhook and when manually fetching history changes
- */
-async function processHistoryChanges(gmailService: GmailService, history: any[]) {
-  const emailDetails: any[] = []
-  
-  for (const change of history) {
-    // Check for new messages
-    if (change.messagesAdded) {
-      for (const messageAdded of change.messagesAdded) {
-        const messageId = messageAdded.message.id
-        const message = await gmailService.getMessage(messageId)
-        
-        if (message) {
-          const headers = message.payload?.headers || []
-          const from = headers.find((h: any) => h.name === 'From')?.value || 'Unknown'
-          const subject = headers.find((h: any) => h.name === 'Subject')?.value || 'No Subject'
-          const date = headers.find((h: any) => h.name === 'Date')?.value || new Date().toISOString()
-          
-          emailDetails.push({
-            id: message.id,
-            from,
-            subject,
-            date: new Date(date).toISOString(),
-            snippet: message.snippet,
-            historyId: message.historyId,
-            source: 'push_notification'
-          })
-        }
-      }
-    }
-  }
-  
-  return emailDetails
 }
