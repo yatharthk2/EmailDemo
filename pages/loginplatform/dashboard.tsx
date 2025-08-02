@@ -1,13 +1,7 @@
 import { useSession, signOut } from 'next-auth/react'
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/router'
-
-interface Attachment {
-  filename: string
-  mimeType: string
-  attachmentId: string
-  size: number
-}
+import Link from 'next/link'
 
 interface Email {
   id: string
@@ -15,9 +9,10 @@ interface Email {
   subject: string
   date: string
   snippet: string
-  source?: string
   hasPdfAttachment?: boolean
-  pdfAttachments?: Attachment[]
+  pdfAttachments?: Array<{filename: string, attachmentId: string, size?: number}>
+  attachmentCount?: number
+  processed?: boolean
 }
 
 export default function Dashboard() {
@@ -26,68 +21,29 @@ export default function Dashboard() {
   const [emails, setEmails] = useState<Email[]>([])
   const [loading, setLoading] = useState(true)
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date())
-  const [isSigningOut, setIsSigningOut] = useState(false)
 
   useEffect(() => {
     if (status === 'unauthenticated') {
       router.push('/email-auth-flow/signin')
-    } else if (status === 'authenticated' && session) {
-      // Check if session will expire soon (within 5 minutes)
-      const checkSessionExpiry = () => {
-        const sessionExpiry = new Date(session.expires as string);
-        const now = new Date();
-        const fiveMinutes = 5 * 60 * 1000; // 5 minutes in milliseconds
-        
-        if (sessionExpiry.getTime() - now.getTime() < fiveMinutes) {
-          // Show notification that session is about to expire
-          alert("Your session will expire soon. You'll need to sign in again to continue.");
-        }
-      };
-      
-      // Check once on load
-      checkSessionExpiry();
-      
-      // Also check every minute
-      const interval = setInterval(checkSessionExpiry, 60 * 1000);
-      return () => clearInterval(interval);
     }
-  }, [status, router, session])
+  }, [status, router])
 
   const fetchEmails = async () => {
+    console.log('[DASHBOARD] Fetching emails with auto-processing...')
     try {
-      const response = await fetch('/api/emails')
+      const response = await fetch('/api/emails-auto-process')
       if (response.ok) {
         const emailData = await response.json()
+        console.log('[DASHBOARD] Received emails:', emailData.length)
         setEmails(emailData)
         setLastRefresh(new Date())
       } else {
-        console.error('Failed to fetch emails')
+        console.error('[DASHBOARD] Failed to fetch emails:', response.status)
       }
     } catch (error) {
-      console.error('Error fetching emails:', error)
+      console.error('[DASHBOARD] Error fetching emails:', error)
     } finally {
       setLoading(false)
-    }
-  }
-  
-  // Handle sign out with clean up
-  const handleSignOut = async () => {
-    if (isSigningOut) return;
-    
-    setIsSigningOut(true);
-    
-    try {
-      // Try to stop Gmail watch before signing out
-      await fetch('/api/stop-watch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
-      });
-      console.log('Gmail watch stopped successfully');
-    } catch (error) {
-      console.error('Error stopping Gmail watch:', error);
-    } finally {
-      // Sign out regardless of whether stopping watch succeeded
-      signOut({ callbackUrl: '/' });
     }
   }
 
@@ -141,16 +97,31 @@ export default function Dashboard() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">Receipt Monitor</h1>
-              <p className="text-sm text-gray-500">Emails with PDF receipts</p>
+              <h1 className="text-2xl font-bold text-gray-900">Gmail PDF Auto-Processor</h1>
+              <p className="text-sm text-gray-500">Auto-processing PDF receipts with AI</p>
             </div>
             
             <div className="flex items-center space-x-4">
+              <Link href="/receipt-processing/ledger">
+                <button className="px-4 py-2 text-sm bg-indigo-100 text-indigo-700 rounded-lg hover:bg-indigo-200">
+                  View Ledger
+                </button>
+              </Link>
+              <Link href="/processing-logs">
+                <button className="px-4 py-2 text-sm bg-green-100 text-green-700 rounded-lg hover:bg-green-200">
+                  Processing Logs
+                </button>
+              </Link>
+              <Link href="/reconciliation">
+                <button className="px-4 py-2 text-sm bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200">
+                  Bank Reconciliation
+                </button>
+              </Link>
               <div className="text-sm text-gray-600">
                 Welcome, {session.user?.name}
               </div>
               <button
-                onClick={handleSignOut}
+                onClick={() => signOut({ callbackUrl: '/' })}
                 className="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
               >
                 Sign Out
@@ -162,27 +133,26 @@ export default function Dashboard() {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Status indicator for Gmail notifications */}
-        <div className="mb-8 bg-green-50 border-l-4 border-green-400 p-4">
-          <div className="flex">
-            <div className="flex-shrink-0">
-              <svg className="h-5 w-5 text-green-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+        {/* Auto-Processing Status */}
+        <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-6">
+          <div className="flex items-center">
+            <div className="flex items-center justify-center w-8 h-8 bg-green-500 rounded-full mr-3">
+              <svg className="w-4 h-4 text-white animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
               </svg>
             </div>
-            <div className="ml-3">
-              <p className="text-sm leading-5 text-green-700">
-                Gmail notifications are active. You will receive real-time updates when new emails arrive.
-              </p>
+            <div>
+              <h3 className="text-sm font-medium text-green-800">Auto-Processing Active</h3>
+              <p className="text-sm text-green-700">PDF attachments are automatically processed with AI as emails arrive</p>
             </div>
           </div>
         </div>
-        
+
         <div className="bg-white rounded-lg shadow">
           <div className="px-6 py-4 border-b border-gray-200">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-medium text-gray-900">
-                PDF Receipt Emails ({emails.length})
+                PDF Emails Auto-Processed ({emails.length})
               </h2>
               <div className="flex items-center space-x-4">
                 <div className="text-sm text-gray-500">
@@ -219,10 +189,10 @@ export default function Dashboard() {
             ) : emails.length === 0 ? (
               <div className="px-6 py-12 text-center">
                 <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                 </svg>
-                <h3 className="mt-4 text-sm font-medium text-gray-900">No PDF receipts found</h3>
-                <p className="mt-2 text-sm text-gray-500">No emails with PDF receipts were found in your inbox.</p>
+                <h3 className="mt-4 text-sm font-medium text-gray-900">No unread emails</h3>
+                <p className="mt-2 text-sm text-gray-500">All caught up! Check back later for new messages.</p>
               </div>
             ) : (
               emails.map((email) => (
@@ -242,14 +212,9 @@ export default function Dashboard() {
                           {extractSenderName(email.from)}
                         </p>
                         <div className="flex items-center space-x-2">
-                          {email.hasPdfAttachment && (
-                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
-                              <svg className="mr-1 h-3 w-3" fill="currentColor" viewBox="0 0 20 20">
-                                <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4zm2 6a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1zm1 3a1 1 0 100 2h6a1 1 0 100-2H7z" clipRule="evenodd" />
-                              </svg>
-                              PDF Receipt
-                            </span>
-                          )}
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                            New
+                          </span>
                           <p className="text-sm text-gray-500 flex-shrink-0">
                             {formatDate(email.date)}
                           </p>
@@ -268,29 +233,6 @@ export default function Dashboard() {
                         <p className="text-sm text-gray-600 mt-1 line-clamp-2">
                           {email.snippet}
                         </p>
-                      )}
-                      
-                      {/* PDF Attachments */}
-                      {email.pdfAttachments && email.pdfAttachments.length > 0 && (
-                        <div className="mt-3">
-                          <p className="text-xs font-medium text-gray-500 mb-1">Attachments:</p>
-                          <div className="flex flex-wrap gap-2">
-                            {email.pdfAttachments.map((attachment, index) => (
-                              <a 
-                                key={index}
-                                href={`/api/download-attachment?messageId=${email.id}&attachmentId=${attachment.attachmentId}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-flex items-center px-2.5 py-1.5 border border-gray-300 shadow-sm text-xs font-medium rounded text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-                              >
-                                <svg className="-ml-1 mr-1 h-4 w-4 text-gray-500" fill="currentColor" viewBox="0 0 20 20">
-                                  <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4zm2 6a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1zm1 3a1 1 0 100 2h6a1 1 0 100-2H7z" clipRule="evenodd" />
-                                </svg>
-                                {attachment.filename.length > 20 ? attachment.filename.substring(0, 18) + '...' : attachment.filename}
-                              </a>
-                            ))}
-                          </div>
-                        </div>
                       )}
                     </div>
                   </div>
