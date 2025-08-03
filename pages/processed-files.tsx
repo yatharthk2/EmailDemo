@@ -70,7 +70,7 @@ export default function ProcessedFiles() {
 
   useEffect(() => {
     fetchFiles();
-  }, []);
+  }, [fetchFiles]);
 
   const handleFilter = () => {
     fetchFiles(1, emailFilter || undefined);

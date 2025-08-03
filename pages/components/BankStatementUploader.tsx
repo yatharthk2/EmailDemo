@@ -427,7 +427,7 @@ export default function BankStatementUploader({ onUploadComplete, className = ''
                 Drag and drop your CSV file here, or click to browse
               </p>
               <p className="text-xs text-gray-500">
-                Supports any CSV format - we'll auto-detect columns or help you map them
+                Supports any CSV format - we&apos;ll auto-detect columns or help you map them
               </p>
               
               <input
